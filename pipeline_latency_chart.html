@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pipeline Latency Comparison</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #f5f4f0;
+      color: #2c2c2a;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    .card {
+      background: #ffffff;
+      border-radius: 16px;
+      border: 0.5px solid #d3d1c7;
+      padding: 2rem 2.5rem;
+      width: 100%;
+      max-width: 980px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+    }
+
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #2c2c2a;
+      margin-bottom: 0.25rem;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: #888780;
+      margin-bottom: 1.5rem;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-bottom: 1.5rem;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: #5f5e5a;
+    }
+
+    .legend-swatch {
+      width: 11px;
+      height: 11px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+
+    .chart-wrap {
+      position: relative;
+      width: 100%;
+      height: 420px;
+    }
+
+    .totals {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+      margin-top: 1.75rem;
+    }
+
+    .total-card {
+      background: #f5f4f0;
+      border-radius: 10px;
+      padding: 0.65rem 0.85rem;
+    }
+
+    .total-card .pipe-name {
+      font-size: 11px;
+      color: #888780;
+      margin-bottom: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .total-card .pipe-total {
+      font-size: 15px;
+      font-weight: 600;
+      color: #2c2c2a;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Pipeline Latency Comparison</h1>
+    <p class="subtitle">Sorted by total latency (ascending) · All values in milliseconds</p>
+
+    <div class="legend">
+      <span class="legend-item"><span class="legend-swatch" style="background:#378ADD"></span>Preprocessor Stage</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#1D9E75"></span>YOLO Stage</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#A455B5"></span>MobileCLIP Stage</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#D85A30"></span>Format Stage</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#BA7517"></span>LLM Stage</span>
+    </div>
+
+    <div class="chart-wrap">
+      <canvas id="chart" role="img" aria-label="Stacked bar chart of pipeline latencies broken into stages">Pipeline latency data shown as stacked bars.</canvas>
+    </div>
+
+    <div class="totals" id="totals"></div>
+  </div>
+
+  <script>
+    const raw = [
+      { name: "P2: YOLO (NPU)",                stages: { preprocessor: 18.08, yolo: 15.79,  mobileclip: 0,       format: 0,    llm: 0        } },
+      { name: "P1: YOLO (CPU)",                 stages: { preprocessor: 20.18, yolo: 96.49,  mobileclip: 0,       format: 0,    llm: 0        } },
+      { name: "P7: MobileCLIP (CPU)",           stages: { preprocessor: 3.59,  yolo: 0,      mobileclip: 1120.28, format: 0,    llm: 0        } },
+      { name: "P9: MobileCLIP (CPU)+LLM (GPU)", stages: { preprocessor: 3.74,  yolo: 0,      mobileclip: 1117.00, format: 0.08, llm: 5475.00  } },
+      { name: "P3: YOLO (CPU)+LLM (GPU)",       stages: { preprocessor: 20.40, yolo: 89.93,  mobileclip: 0,       format: 0.09, llm: 5740.80  } },
+      { name: "P6: YOLO (NPU)+LLM (GPU)",       stages: { preprocessor: 19.09, yolo: 12.86,  mobileclip: 0,       format: 0.08, llm: 6353.07  } },
+      { name: "P4: YOLO (CPU)+LLM (CPU)",       stages: { preprocessor: 20.58, yolo: 88.28,  mobileclip: 0,       format: 0.09, llm: 13111.25 } },
+      { name: "P8: MobileCLIP (CPU)+LLM (CPU)", stages: { preprocessor: 4.16,  yolo: 0,      mobileclip: 1120.00, format: 0.08, llm: 12847.00 } },
+      { name: "P5: YOLO (NPU)+LLM (CPU)",       stages: { preprocessor: 19.32, yolo: 13.28,  mobileclip: 0,       format: 0.08, llm: 14549.58 } },
+    ];
+
+    const total = p => Object.values(p.stages).reduce((s, v) => s + v, 0);
+    raw.sort((a, b) => total(a) - total(b));
+
+    const labels = raw.map(p => p.name);
+
+    new Chart(document.getElementById('chart'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Preprocessor Stage', data: raw.map(p => p.stages.preprocessor), backgroundColor: '#378ADD', borderWidth: 0 },
+          { label: 'YOLO Stage',         data: raw.map(p => p.stages.yolo),         backgroundColor: '#1D9E75', borderWidth: 0 },
+          { label: 'MobileCLIP Stage',   data: raw.map(p => p.stages.mobileclip),   backgroundColor: '#A455B5', borderWidth: 0 },
+          { label: 'Format Stage',       data: raw.map(p => p.stages.format),       backgroundColor: '#D85A30', borderWidth: 0 },
+          { label: 'LLM Stage',          data: raw.map(p => p.stages.llm),          backgroundColor: '#BA7517', borderWidth: 0 },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ctx.raw === 0 ? null : ` ${ctx.dataset.label}: ${ctx.raw.toFixed(2)} ms`,
+              footer: items => `Total: ${items.reduce((s, i) => s + i.raw, 0).toFixed(2)} ms`
+            }
+          }
+        },
+        scales: {
+          x: {
+            stacked: true,
+            ticks: { autoSkip: false, maxRotation: 25, font: { size: 11 }, color: '#888780' },
+            grid: { display: false }
+          },
+          y: {
+            stacked: true,
+            title: { display: true, text: 'Latency (ms)', color: '#888780', font: { size: 12 } },
+            ticks: {
+              color: '#888780',
+              callback: v => v >= 1000 ? (v / 1000).toFixed(0) + 's' : v + 'ms'
+            },
+            grid: { color: 'rgba(136,135,128,0.15)' }
+          }
+        }
+      }
+    });
+
+    const totalsEl = document.getElementById('totals');
+    raw.forEach(p => {
+      const t = total(p);
+      const div = document.createElement('div');
+      div.className = 'total-card';
+      div.innerHTML = `<div class="pipe-name">${p.name}</div><div class="pipe-total">${t >= 1000 ? (t/1000).toFixed(2) + ' s' : t.toFixed(2) + ' ms'}</div>`;
+      totalsEl.appendChild(div);
+    });
+  </script>
+</body>
+</html>
